@@ -22,4 +22,4 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "docs: fixed typos"
-          title: "docs: automatated spelling fixes"
+          title: "docs: automated spelling fixes"

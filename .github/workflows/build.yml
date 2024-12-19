@@ -1,0 +1,25 @@
+name: Build Docs
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 1"
+
+jobs:
+  build:
+    name: Validate Spelling
+    runs-on: [ubuntu-latest]
+    permissions: write-all
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4.2.2
+
+      - name: Fix Spelling
+        uses: sobolevn/misspell-fixer-action@0.1.0
+
+      - name: Create Branch
+        uses: peter-evans/create-pull-request@v7.0.5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "docs: fixed typos"
+          title: "docs: automatated spelling fixes"

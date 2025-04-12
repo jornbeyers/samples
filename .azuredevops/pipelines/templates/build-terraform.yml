@@ -1,16 +1,25 @@
 parameters:
   - name: ARTIFACTS_DIRECTORY
+    type: string
     default: 'artifacts'
   - name: ENVIRONMENT
+    type: string
   - name: SERVICE_CONNECTION
+    type: string
   - name: TERRAFORM_BACKEND
+    type: string
   - name: TERRAFORM_PLAN
+    type: string
     default: 'out.tfplan'
   - name: TERRAFORM_VARIABLES
+    type: string
   - name: TERRAFORM_VERSION
+    type: string
   - name: TOKENIZE_SOURCES
+    type: string
     default: '[]'
   - name: WORKING_DIRECTORY
+    type: string
     default: '.'
 
 steps:

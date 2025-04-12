@@ -1,0 +1,134 @@
+parameters:
+  - name: ARTIFACTS_DIRECTORY
+    default: 'artifacts'
+  - name: ENVIRONMENT
+  - name: SERVICE_CONNECTION
+  - name: TERRAFORM_BACKEND
+  - name: TERRAFORM_PLAN
+    default: 'out.tfplan'
+  - name: TERRAFORM_VARIABLES
+  - name: TERRAFORM_VERSION
+  - name: TOKENIZE_SOURCES
+    default: '[]'
+  - name: WORKING_DIRECTORY
+    default: '.'
+
+steps:
+  - checkout: self
+    displayName: Checkout Repository
+
+  - task: qetza.replacetokens.replacetokens-task.replacetokens@6
+    displayName: Tokenize
+    condition: ne('${{ parameters.TOKENIZE_SOURCES }}', '[]')
+    inputs:
+      sources: "${{ parameters.TOKENIZE_SOURCES }}"
+      encoding: "auto"
+      addBOM: true
+      missingVarLog: "error"
+      tokenPrefix: "#{"
+      tokenSuffix: "}#"
+      logLevel: debug
+      rootDirectory: ${{ parameters.WORKING_DIRECTORY }}
+
+  - task: ms-devlabs.custom-terraform-tasks.custom-terraform-installer-task.TerraformInstaller@1
+    displayName: Terraform Install
+    inputs:
+      terraformVersion: ${{ parameters.TERRAFORM_VERSION }}
+
+  - bash: |
+      terraform fmt \
+        -check \
+        -recursive
+    displayName: Terraform Format
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    workingDirectory: ${{ parameters.WORKING_DIRECTORY }}
+
+  - task: AzureCLI@2
+    displayName: Terraform Setup
+    inputs:
+      azureSubscription: ${{ parameters.SERVICE_CONNECTION }}
+      addSpnToEnvironment: true
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        echo "##vso[task.setvariable variable=ARM_USE_OIDC]true"
+        echo "##vso[task.setvariable variable=ARM_OIDC_TOKEN]$idToken"
+        echo "##vso[task.setvariable variable=ARM_CLIENT_ID]$servicePrincipalId"
+        echo "##vso[task.setvariable variable=ARM_SUBSCRIPTION_ID]$(az account show --query id --output tsv)"
+        echo "##vso[task.setvariable variable=ARM_TENANT_ID]$tenantId"
+
+  - bash: |
+      terraform init \
+        -backend-config="${{ parameters.TERRAFORM_BACKEND }}" \
+        -input=false
+    displayName: Terraform Init
+    workingDirectory: ${{ parameters.WORKING_DIRECTORY }}
+
+  - bash: |
+      terraform validate \
+        -no-color
+    displayName: Terraform Validate
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    workingDirectory: ${{ parameters.WORKING_DIRECTORY }}
+
+  - bash: |
+      pip install checkov
+      checkov --directory .
+    displayName: Terraform Scan
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    workingDirectory: ${{ parameters.WORKING_DIRECTORY }}
+
+  - bash: |
+      terraform plan \
+        -input=false \
+        -lock=false \
+        -no-color \
+        -var-file="${{ parameters.TERRAFORM_VARIABLES }}" \
+        --out="$(Build.ArtifactStagingDirectory)/${{ parameters.TERRAFORM_PLAN }}"
+    displayName: Terraform Plan
+    workingDirectory: ${{ parameters.WORKING_DIRECTORY }}
+
+  - bash: |
+      terraform show -no-color "$(Build.ArtifactStagingDirectory)/${{ parameters.TERRAFORM_PLAN }}" > "$(Build.ArtifactStagingDirectory)/plan_output.txt"
+
+      # Read the Terraform plan output
+      planOutput="$(cat "$(Build.ArtifactStagingDirectory)/plan_output.txt")"
+
+      # Truncate if output exceeds Azure DevOps limits
+      contentLength="$(echo -n "$planOutput" | wc -c)"
+      if [ "$contentLength" -gt 149950 ]; then
+        planOutput="$(echo -n "$planOutput" | cut -c1-149950)"
+        planOutput="$planOutput\n... (truncated)"
+      fi
+
+      # Build the collapsible comment content
+      commentContent="<details>\n<summary>Show Terraform Plan</summary>\n\n\`\`\`terraform\n$planOutput\n\`\`\`\n</details>"
+
+      # Escape double quotes for JSON
+      commentEscaped="$(echo "$commentContent" | sed 's/\"/\\"/g')"
+
+      # Build JSON body for the comment
+      json="$(printf '{"comments":[{"parentCommentId":0,"content":"%s","commentType":1}],"status":1}' "$commentEscaped")"
+
+      # Construct the Azure DevOps API URL for the current PR
+      url="$(System.CollectionUri)$(System.TeamProject)/_apis/git/repositories/$(Build.Repository.Name)/pullRequests/$(System.PullRequest.PullRequestId)/threads?api-version=5.1"
+
+      # Post the comment
+      curl --request POST "$url" \
+           --header "Content-Type: application/json" \
+           --header "Accept: application/json" \
+           --header "Authorization: Bearer $SYSTEM_ACCESSTOKEN" \
+           --data "$json" \
+           --verbose
+    displayName: Comment Terraform Plan
+    condition: and(succeeded(), eq(variables['Build.Reason'], 'PullRequest'))
+    workingDirectory: ${{ parameters.WORKING_DIRECTORY }}
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  - task: PublishPipelineArtifact@1
+    displayName: Upload Terraform Plan
+    condition: ne(variables['Build.Reason'], 'PullRequest')
+    inputs:
+      targetPath: $(Build.ArtifactStagingDirectory)/${{ parameters.TERRAFORM_PLAN }}
+      artifactName: ${{ parameters.ARTIFACTS_DIRECTORY }}
